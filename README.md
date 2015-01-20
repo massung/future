@@ -72,11 +72,21 @@ If the future process signals a condition, the condition is caught by the future
 	  1 (abort) Return to level 0.
 	  2 Return to top loop level 0.
 
+`future-join` also has additional keyword arguments allowing for the handling of timeouts and conditions.
+
+	(future-join future &key timeout errorp error-value)
+
+The *errorp* defaults to `t`, meaning that any conditions signaled in the future's process will be re-signaled. If *errorp* is `nil`, then in the event that the future's process has an error, *error-value* will be returned instead.
+
+	CL-USER > (future-join (future (+ 1 'a)) :errorp nil :error-value :oops)
+	:OOPS
+	T
+
 ## Producer, Meet Consumer...
 
 As a helpful wrapper, the `with-promise` macro can be used to both produce a promised value and wait for/consume it in a separate thread.
 
-	(with-promise (var form &key apply-in-pane-process) &body body)
+	(with-promise (var form &key apply-in-pane-process errorp error-value) &body body)
 
 For example:
 

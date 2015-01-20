@@ -35,12 +35,12 @@
 
 (in-package :future)
 
-(defmacro with-promise ((var form &key apply-in-pane-process) &body body)
+(defmacro with-promise ((var form &key apply-in-pane-process (errorp t) error-value) &body body)
   "Create a future, wait for it in another thread, then execute body with the promised value."
   (let ((f (gensym "future"))
         (c (gensym "consumer")))
     `(flet ((,c (,f)
-              (let ((,var (future-join ,f)))
+              (let ((,var (future-join ,f :errorp ,errorp :error-value ,error-value)))
                 ,(if apply-in-pane-process
                      `(apply-in-pane-process-if-alive ,apply-in-pane-process #'(lambda () ,@body))
                    `(progn ,@body)))))
@@ -97,9 +97,11 @@
   "T if the future's producer has finished executing."
   (not (process-alive-p (future-process future))))
 
-(defmethod future-join ((future future) &key timeout)
+(defmethod future-join ((future future) &key timeout errorp error-value)
   "Wait for a future to be realized and then return its value or signal its condition."
   (when (process-join (future-process future) :timeout timeout)
     (if-let (c (future-condition future))
-        (error c)
+        (if errorp
+            (error c)
+          (values error-value t))
       (values (promise-get (future-promise future)) t))))
