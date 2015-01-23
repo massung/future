@@ -97,7 +97,7 @@
   "T if the future's producer has finished executing."
   (not (process-alive-p (future-process future))))
 
-(defmethod future-join ((future future) &key timeout errorp error-value)
+(defmethod future-join ((future future) &key timeout (errorp t) error-value)
   "Wait for a future to be realized and then return its value or signal its condition."
   (when (process-join (future-process future) :timeout timeout)
     (if-let (c (future-condition future))
