@@ -1,6 +1,7 @@
-;;;; Futures/Promises for LispWorks
+;;;; Futures and Promises for ClozureCL
 ;;;;
-;;;; Copyright (c) 2014 by Jeffrey Massung
+;;;; Copyright (c) Jeffrey Massung
+;;;; All rights reserved.
 ;;;;
 ;;;; This file is provided to you under the Apache License,
 ;;;; Version 2.0 (the "License"); you may not use this file
@@ -18,90 +19,126 @@
 ;;;;
 
 (defpackage :future
-  (:use :cl :lw :mp :capi)
+  (:use :cl :ccl)
   (:export
    #:with-promise
 
    ;; promises
    #:promise
    #:promise-deliver
+   #:promise-delivered-p
    #:promise-get
 
    ;; futures
    #:future
+   #:future-condition
+   #:future-join
    #:future-promise
-   #:future-realized-p
-   #:future-join))
+   #:future-realized-p))
 
 (in-package :future)
 
-(defmacro with-promise ((var form &key apply-in-pane-process (errorp t) error-value) &body body)
-  "Create a future, wait for it in another thread, then execute body with the promised value."
-  (let ((f (gensym "future"))
-        (c (gensym "consumer")))
-    `(flet ((,c (,f)
-              (let ((,var (future-join ,f :errorp ,errorp :error-value ,error-value)))
-                ,(if apply-in-pane-process
-                     `(apply-in-pane-process-if-alive ,apply-in-pane-process #'(lambda () ,@body))
-                   `(progn ,@body)))))
-       (prog1 nil
-         (process-run-function "Promise" nil #',c (future ,form))))))
+;;; ----------------------------------------------------
 
 (defclass promise ()
-  ((value     :reader promise-value    :initform :no-value))
-  (:documentation "A container for an immutable, future-delivered value."))
+  ((value :reader promise-value :initarg :value))
+  (:documentation "A promised value."))
 
-(defmethod promise-deliver ((promise promise) value)
-  "If the promise hasn't yet been set, set it now."
-  (sys:compare-and-swap (slot-value promise 'value) :no-value value))
+;;; ----------------------------------------------------
 
-(defmethod promise-get ((promise promise) &key timeout)
-  "Block until the promise has been delivered and return the value."
-  (flet ((delivered-p ()
-           (not (sys:compare-and-swap (slot-value promise 'value) :no-value :no-value))))
-    (when (process-wait-with-timeout "Waiting for promise" timeout #'delivered-p)
-      (promise-value promise))))
+(defmethod promise-deliver ((p promise) value)
+  "Deliver a value to a promise."
+  (unless (promise-delivered-p p)
+    (values (setf (slot-value p 'value) value) t)))
 
-(defmacro future (form)
-  "Create a future object that wraps a process evaluating a form."
-  `(make-instance 'future :function #'(lambda () ,form)))
+;;; ----------------------------------------------------
+
+(defmethod promise-delivered-p ((p promise))
+  "T if the promise has been delivered."
+  (slot-boundp p 'value))
+
+;;; ----------------------------------------------------
+
+(defmethod promise-get ((p promise))
+  "Wait until a promise has been delivered and return it value."
+  (when (process-wait "Promise" #'promise-delivered-p p)
+    (promise-value p)))
+
+;;; ----------------------------------------------------
+
+(defmethod print-object ((p promise) stream)
+  "Output a promise to a stream."
+  (print-unreadable-object (p stream :type t)
+    (if (promise-delivered-p p)
+        (format stream "DELIVERED ~s" (promise-value p))
+      (princ "UNDELIEVERED" stream))))
+
+;;; ----------------------------------------------------
 
 (defclass future ()
   ((promise   :reader future-promise   :initform (make-instance 'promise))
-   (condition :reader future-condition :initform nil)
-   (process   :reader future-process   :initform nil))
-  (:extra-initargs '(:function :args))
-  (:documentation "A deferred evaluation."))
+   (condition :reader future-condition :initform ())
+   (process   :reader future-process   :initform ()))
+  (:documentation "A promise value producer."))
 
-(defmethod print-object ((future future) stream)
-  "Output a future to a stream."
-  (print-unreadable-object (future stream :type t)
-    (if (future-realized-p future)
-        (if-let (c (future-condition future))
-            (format stream "ERROR ~s" (princ-to-string c))
-          (format stream "OK ~s" (promise-get (future-promise future))))
-      (princ "UNREALIZED" stream))))
+;;; ----------------------------------------------------
 
-(defmethod initialize-instance :after ((future future) &key function args)
-  "Start the future process."
+(defmethod initialize-instance :after ((f future) &key function &allow-other-keys)
+  "Create a promise and spawn a producer process."
   (with-slots (promise condition process)
-      future
+      f
     (flet ((producer ()
              (handler-case
-                 (promise-deliver promise (apply function args))
+                 (promise-deliver promise (funcall function))
                (condition (c)
-                 (sys:atomic-exchange condition c)))))
-      (setf process (process-run-function "Future" nil #'producer)))))
+                 (setf condition c)))))
+      (setf process (process-run-function "Future" #'producer)))))
 
-(defmethod future-realized-p ((future future))
-  "T if the future's producer has finished executing."
-  (not (process-alive-p (future-process future))))
+;;; ----------------------------------------------------
 
-(defmethod future-join ((future future) &key timeout (errorp t) error-value)
-  "Wait for a future to be realized and then return its value or signal its condition."
-  (when (process-join (future-process future) :timeout timeout)
-    (if-let (c (future-condition future))
-        (if errorp
-            (error c)
-          (values error-value t))
-      (values (promise-get (future-promise future)) t))))
+(defmethod future-realized-p ((f future))
+  "T if the future's promise has been delivered or a condition signaled."
+  (or (future-condition f) (promise-delivered-p (future-promise f))))
+
+;;; ----------------------------------------------------
+
+(defmethod future-join ((f future) &optional (errorp t) error-value)
+  "Wait for a future's promise to be delievered."
+  (when (join-process (future-process f))
+    (let ((c (future-condition f)))
+      (if c
+          (if errorp
+              (error c)
+            (values error-value t))
+        (values (promise-get (future-promise f)) t)))))
+
+;;; ----------------------------------------------------
+
+(defmethod print-object ((f future) stream)
+  "Output a future toa  stream."
+  (print-unreadable-object (f stream :type t)
+    (cond ((future-condition f)
+           (format stream "ERROR ~s" (princ-to-string (future-condition f))))
+          ((future-realized-p f)
+           (format stream "OK ~s" (promise-get (future-promise f))))
+          (t
+           (princ "UNREALIZED" stream)))))
+
+;;; ----------------------------------------------------
+
+(defmacro future (form)
+  "Create a future from a form."
+  `(make-instance 'future :function #'(lambda () ,form)))
+
+;;; ----------------------------------------------------
+
+(defmacro with-promise ((var form &optional (errorp t) error-value) &body body)
+  "Create a future and consumer function that waits for the future."
+  (let ((f (gensym "future"))
+        (c (gensym "consumer")))
+    `(flet ((,c (,f)
+              (let ((,var (future-join ,f ,errorp ,error-value)))
+                ,@body)))
+       (prog1 nil
+         (process-run-function "Promise" #',c (future ,form))))))
+
