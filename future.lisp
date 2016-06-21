@@ -33,6 +33,8 @@
    #:future
    #:future-condition
    #:future-join
+   #:future-map
+   #:future-sequence
    #:future-promise
    #:future-realized-p))
 
@@ -111,6 +113,18 @@
               (error c)
             (values error-value t))
         (values (promise-get (future-promise f)) t)))))
+
+;;; ----------------------------------------------------
+
+(defmethod future-map (then (f future) &optional (errorp t) error-value)
+  "Execute another function with the result of a future."
+  (future (funcall then (future-join f errorp error-value))))
+
+;;; ----------------------------------------------------
+
+(defmethod future-sequence ((fs sequence))
+  "Coalesce a list of futures into a single future."
+  (future (map 'list #'future-join fs)))
 
 ;;; ----------------------------------------------------
 

@@ -82,6 +82,20 @@ The *errorp* defaults to `t`, meaning that any conditions signaled in the future
 	:OOPS
 	T
 
+You can chain futures together using `future-map`.
+
+    CL-USER > (future-map #'(lambda (x) (* x 2)) (future (+ 2 2)))
+	#<FUTURE OK 8>
+
+Like `future-join`, the `future-map` function also takes optional `errorp` and `error-value` parameters.
+
+Finally, You can coalesce a series of futures together into a single future using `future-sequence`. This will wait for all the futures to complete, and return a list of their results.
+
+	CL-USER > (future-sequence (list (future 1) (future 2) (future 3)))
+	#<FUTURE OK (1 2 3)>
+
+*NOTE: The results of the sequence future will be in the same order as the futures list*.
+
 ## Producer, Meet Consumer...
 
 As a helpful wrapper, the `with-promise` macro can be used to both produce a promised value and wait for/consume it in a separate thread.
