@@ -1,4 +1,4 @@
-;;;; Futures and Promises for ClozureCL
+;;;; Futures and Promises for SBCL
 ;;;;
 ;;;; Copyright (c) Jeffrey Massung
 ;;;; All rights reserved.
@@ -19,7 +19,7 @@
 ;;;;
 
 (defpackage :future
-  (:use :cl :ccl)
+  (:use :cl :sb-thread)
   (:export
    #:with-promise
 
@@ -63,8 +63,9 @@
 
 (defmethod promise-get ((p promise))
   "Wait until a promise has been delivered and return it value."
-  (when (process-wait "Promise" #'promise-delivered-p p)
-    (promise-value p)))
+  (do ()
+      ((promise-delivered-p p) (promise-value p))
+    (thread-yield)))
 
 ;;; ----------------------------------------------------
 
@@ -94,7 +95,7 @@
                  (promise-deliver promise (funcall function))
                (condition (c)
                  (setf condition c)))))
-      (setf process (process-run-function "Future" #'producer)))))
+      (setf process (make-thread #'producer :name "Future")))))
 
 ;;; ----------------------------------------------------
 
@@ -106,7 +107,7 @@
 
 (defmethod future-join ((f future) &optional (errorp t) error-value)
   "Wait for a future's promise to be delievered."
-  (when (join-process (future-process f))
+  (when (join-thread (future-process f))
     (let ((c (future-condition f)))
       (if c
           (if errorp
@@ -154,4 +155,4 @@
               (let ((,var (future-join ,f ,errorp ,error-value)))
                 ,@body)))
        (prog1 nil
-         (process-run-function "Promise" #',c (future ,form))))))
+         (make-thread #',c :name "Promise" :arguments (list (future ,form)))))))
