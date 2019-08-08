@@ -21,8 +21,6 @@
 (defpackage :future
   (:use :cl :sb-thread)
   (:export
-   #:with-promise
-
    ;; promises
    #:promise
    #:promise-deliver
@@ -86,16 +84,26 @@
 
 ;;; ----------------------------------------------------
 
-(defmethod initialize-instance :after ((f future) &key function &allow-other-keys)
+(defmethod initialize-instance :after ((f future) &key function arguments)
   "Create a promise and spawn a producer process."
   (with-slots (promise condition process)
       f
     (flet ((producer ()
              (handler-case
-                 (promise-deliver promise (funcall function))
+                 (promise-deliver promise (apply function arguments))
                (condition (c)
                  (setf condition c)))))
       (setf process (make-thread #'producer :name "Future")))))
+
+;;; ----------------------------------------------------
+
+(defmacro future (function &rest args)
+  "Create a future from a form."
+  (let ((f (gensym))
+        (xs (gensym)))
+    `(let ((,f ,function)
+           (,xs (list ,@args)))
+       (make-instance 'future :function ,f :arguments ,xs))))
 
 ;;; ----------------------------------------------------
 
@@ -119,13 +127,13 @@
 
 (defmethod future-map (then (f future) &optional (errorp t) error-value)
   "Execute another function with the result of a future."
-  (future (funcall then (future-join f errorp error-value))))
+  (future 'funcall then (future-join f errorp error-value)))
 
 ;;; ----------------------------------------------------
 
 (defmethod future-sequence ((fs sequence))
   "Coalesce a list of futures into a single future."
-  (future (map 'list #'future-join fs)))
+  (future 'map 'list #'future-join fs))
 
 ;;; ----------------------------------------------------
 
@@ -138,21 +146,3 @@
            (format stream "OK ~s" (promise-get (future-promise f))))
           (t
            (princ "UNREALIZED" stream)))))
-
-;;; ----------------------------------------------------
-
-(defmacro future (form)
-  "Create a future from a form."
-  `(make-instance 'future :function #'(lambda () ,form)))
-
-;;; ----------------------------------------------------
-
-(defmacro with-promise ((var form &optional (errorp t) error-value) &body body)
-  "Create a future and consumer function that waits for the future."
-  (let ((f (gensym "future"))
-        (c (gensym "consumer")))
-    `(flet ((,c (,f)
-              (let ((,var (future-join ,f ,errorp ,error-value)))
-                ,@body)))
-       (prog1 nil
-         (make-thread #',c :name "Promise" :arguments (list (future ,form)))))))
